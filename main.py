@@ -11,6 +11,9 @@ from PyQt5.QtGui import QColor
 import random, json
 from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
 
+from PyQt5.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QDateEdit, QMessageBox
+from PyQt5.QtCore import QDate
+
 
 def generate_soft_dark_color():
     """Generate a soft dark hex color."""
@@ -81,7 +84,7 @@ class AddInventoryDialog(QDialog):
         self.setLayout(layout)
         
     def loadItemNames(self):
-        try:
+        try:    
             with open("item_names.json", "r") as file:
                 itemNames = json.load(file)
         except (FileNotFoundError, json.JSONDecodeError):
@@ -198,11 +201,28 @@ class EditInventoryDialog(QDialog):
         layout.addWidget(QLabel("Purchase Date"))
         layout.addWidget(self.purchaseDateEdit)
 
-        # Make Date Added editable
         self.dateAddedEdit = QDateEdit(QDate.fromString(data['date_added'], "MM-dd-yyyy"), self)
         self.dateAddedEdit.setCalendarPopup(True)
         layout.addWidget(QLabel("Date Added"))
         layout.addWidget(self.dateAddedEdit)
+
+        # Date Opened Field
+        self.dateOpenedEdit = QDateEdit(self)
+        self.dateOpenedEdit.setCalendarPopup(True)
+        self.dateOpenedEdit.setDate(QDate.currentDate())  # Default to current date
+        # Check if a "date_opened" key exists and it is not empty
+
+        # If there's a "date_opened" value, set it
+        if 'date_opened' in data and data['date_opened']:
+            self.dateOpenedEdit.setDate(QDate.fromString(data['date_opened'], "MM-dd-yyyy"))
+        else:
+            # Optional: For new entries or if not opened, you might want to indicate it's not set yet
+            # This line is optional, depending on how you want to handle new or unopened items
+            self.dateOpenedEdit.setSpecialValueText("Not Opened")
+            # If you want the field to be editable even if not previously opened, remove the next line
+            self.dateOpenedEdit.setEnabled(True)  # Ensure it's enabled for editing
+        layout.addWidget(QLabel("Date Opened"))
+        layout.addWidget(self.dateOpenedEdit)
 
         # Add buttons
         buttonsLayout = QHBoxLayout()
@@ -223,11 +243,9 @@ class EditInventoryDialog(QDialog):
             "expiration_date": self.expirationDateEdit.date().toString("MM-dd-yyyy"),
             "purchase_location": self.purchaseLocationEdit.text(),
             "purchase_date": self.purchaseDateEdit.date().toString("MM-dd-yyyy"),
-            "date_added": self.dateAddedEdit.date().toString("MM-dd-yyyy")
+            "date_added": self.dateAddedEdit.date().toString("MM-dd-yyyy"),
+            "date_opened": self.dateOpenedEdit.date().toString("MM-dd-yyyy") if self.dateOpenedEdit.isEnabled() else ""
         }
-
-from PyQt5.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QDateEdit, QMessageBox
-from PyQt5.QtCore import QDate
 
 class CreateBatchDialog(QDialog):
     def __init__(self, batch_size, parent=None):
@@ -253,7 +271,7 @@ class CreateBatchDialog(QDialog):
         # Batch Size (Read-Only)
         self.batchSizeEdit = QLineEdit(self)
         self.batchSizeEdit.setText(str(batch_size))
-        layout.addWidget(QLabel("Number of Items in the Batch"))
+        layout.addWidget(QLabel("Number of Outgoing Boxes in the Batch"))
         layout.addWidget(self.batchSizeEdit)
 
         # Add buttons
@@ -306,14 +324,24 @@ class CheckableSqlInventoryModel(QSqlQueryModel):
     def load_data(self):
         self.setQuery("""
             SELECT 
-                inventory.id, inventory.name, inventory.expiration_date, inventory.purchase_location, 
-                inventory.purchase_date, inventory.purchase_lot_number, inventory.date_added, inventory.status,
-                batches.sell_date, batches.sell_location, batches.fig_and_brie_batch_number, batches.batch_color
+                inventory.id, 
+                inventory.name, 
+                inventory.date_opened,  -- Include the 'date opened' column
+                inventory.expiration_date, 
+                inventory.purchase_location, 
+                inventory.purchase_date, 
+                inventory.purchase_lot_number, 
+                inventory.date_added, 
+                inventory.status,
+                batches.sell_date, 
+                batches.sell_location, 
+                batches.fig_and_brie_batch_number, 
+                batches.batch_color
             FROM inventory 
             LEFT JOIN batches ON inventory.batch_id = batches.batch_id
             ORDER BY 
-                CASE WHEN inventory.status = 'Available' THEN 1 ELSE 2 END,  -- 'Available' items first
-                inventory.batch_id  -- Group by batch_id
+                CASE WHEN inventory.status = 'Available' THEN 1 ELSE 2 END,
+                inventory.batch_id
         """)
 
     def rowCount(self, parent=QModelIndex()):
@@ -330,8 +358,8 @@ class CheckableSqlInventoryModel(QSqlQueryModel):
             return ""
 
         if role == Qt.BackgroundRole:
-            # Fetch the batch color from the 12th column (index 11)
-            color_index = self.createIndex(index.row(), 11)
+            # Fetch the batch color from the 13th column (index 12)
+            color_index = self.createIndex(index.row(), 12)
             color_value = super().data(color_index, Qt.DisplayRole)
             if color_value:  # If color value is present, set the background color
                 return QColor(color_value)
@@ -355,9 +383,23 @@ class CheckableSqlInventoryModel(QSqlQueryModel):
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
-            headers = ["Inventory", "Item ID", "Item Name", "Expiration Date", "Vendor",
-                    "Purchase Date", "Purchase Lot Number", "Date Added", "Status", "Sell Date", "Sell Location", 
-                    "Fig and Brie Batch Code", "Batch Color"]
+            # Update headers list to include 'Date Opened' before 'Expiration Date'
+            headers = [
+                "Inventory", 
+                "Item ID", 
+                "Item Name", 
+                "Date Opened",  # New column header
+                "Expiration Date", 
+                "Vendor",
+                "Purchase Date", 
+                "Purchase Lot Number", 
+                "Date Added", 
+                "Status", 
+                "Sell Date", 
+                "Sell Location", 
+                "Fig and Brie Batch Code", 
+                "Batch Color"
+            ]
             if 0 <= section < len(headers):
                 return headers[section]
         return super().headerData(section, orientation, role)
@@ -564,6 +606,30 @@ class InventoryApp(QMainWindow):
             }
         """)
         buttonsLayout.addWidget(self.addButton)
+        
+        # Open Inventory buttons
+        self.openButton = QPushButton('Open Checked\nInventory Items', self)
+        self.openButton.clicked.connect(self.setDateOpenedForSelected)
+        self.openButton.setFixedSize(150, 60)
+        # Styling the add button
+        self.openButton.setStyleSheet("""
+            QPushButton {
+                background-color: #98FB98; /* Light green background */
+                color: black; /* Text color */
+                border-radius: 12px; /* Rounded corners */
+                padding: 6px; /* Padding around text */
+                border: 1px solid #5FBC5F; /* Slightly darker border for depth */
+                font-weight: bold; /* Making the text bold */
+                font-size: 14px; /* Font size */
+            }
+            QPushButton:hover {
+                background-color: #90EE90; /* Slightly darker green when hovered */
+            }
+            QPushButton:pressed {
+                background-color: #7CCD7C; /* Even darker green when pressed */
+            }
+        """)
+        buttonsLayout.addWidget(self.openButton)
         
         # Batch buttons
         self.createBatchButton = QPushButton('Create Batch', self)
@@ -786,7 +852,7 @@ class InventoryApp(QMainWindow):
         # Depending on your implementation, you may not need this signal connection
 
         # Hide the ID Column
-        self.inventoryTableView.hideColumn(12)
+        self.inventoryTableView.hideColumn(13)
         
         # Set Alignment
         header = self.inventoryTableView.horizontalHeader()
@@ -829,6 +895,40 @@ class InventoryApp(QMainWindow):
             # Refresh your grid view here to show the new data
             self.model.load_data()
             self.inventoryTableView.resizeColumnsToContents()
+            
+    def setDateOpenedForSelected(self):
+        selectedRows = self.getSelectedRows()  # Get selected item IDs
+        todayDate = QDate.currentDate().toString("MM-dd-yyyy")  # Format today's date as a string
+        openedItems = []  # To track items that are already opened by name
+
+        for inventory_id in selectedRows:
+            # Check if the opened date is already set and fetch the item name
+            check_query = QSqlQuery()
+            check_query.prepare("SELECT name, date_opened FROM inventory WHERE id = :inventory_id")
+            check_query.bindValue(":inventory_id", inventory_id)
+            check_query.exec_()
+            
+            if check_query.next() and check_query.value(1):
+                # If there's already a date set, add the item name to the list and skip updating
+                openedItems.append(check_query.value(0))  # Using item name instead of ID
+                continue  # Skip this item
+            
+            # Update the opened date for items that don't have it set
+            update_query = QSqlQuery()
+            update_query.prepare("UPDATE inventory SET date_opened = :date_opened WHERE id = :inventory_id")
+            update_query.bindValue(":date_opened", todayDate)
+            update_query.bindValue(":inventory_id", inventory_id)
+            if not update_query.exec_():
+                QMessageBox.critical(self, "Database Error", update_query.lastError().text())
+
+        # If there are opened items, show a modal popup
+        if openedItems:
+            QMessageBox.information(self, "Package Already Opened",
+                                    "The following items are already opened and cannot be opened again: " + ", ".join(openedItems) + 
+                                    ". To modify, please use the edit functionality.",
+                                    QMessageBox.Ok)
+
+        self.model.load_data()  # Refresh the table view to show the updated dates
             
     def editVendorJson(self):
         self.editJsonFile("vendors.json")
@@ -927,7 +1027,7 @@ class InventoryApp(QMainWindow):
 
             # Generate fig_and_brie_batch_number using the batch_id
             date_str = batch_data['sell_date'].replace('-', '')
-            batch_number = f"{date_str}-{batch_data['batch_size']}-{batch_id}"
+            batch_number = f"{batch_id}-{date_str}-{batch_data['batch_size']}-LC"
 
             # Update the batch record with the generated batch number
             update_batch_query = QSqlQuery()
@@ -968,6 +1068,14 @@ class InventoryApp(QMainWindow):
         # Logic to handle "Cancel Label" action, like clearing the text box
         self.labelTextBox.clear()
     
+    def getSelectedRows(self):
+        selectedRows = []
+        for row in range(self.model.rowCount()):
+            if self.model.data(self.model.index(row, 0), Qt.CheckStateRole) == Qt.Checked:
+                inventory_id = self.model.data(self.model.index(row, 1))  # Assuming ID is in column 1
+                selectedRows.append(inventory_id)
+        return selectedRows
+
     def removeCheckedRows(self):
         rows_to_remove = []
         cannot_remove = False
@@ -1026,10 +1134,11 @@ class InventoryApp(QMainWindow):
     def openEditDialog(self, row):
         data_to_edit = {
             'name': self.model.data(self.model.index(row, 2)),
-            'expiration_date': self.model.data(self.model.index(row, 3)),
-            'purchase_location': self.model.data(self.model.index(row, 4)),
-            'purchase_date': self.model.data(self.model.index(row, 5)),
-            'date_added': self.model.data(self.model.index(row, 6)),
+            'date_opened': self.model.data(self.model.index(row, 3)),
+            'expiration_date': self.model.data(self.model.index(row, 4)),
+            'purchase_location': self.model.data(self.model.index(row, 5)),
+            'purchase_date': self.model.data(self.model.index(row, 6)),
+            'date_added': self.model.data(self.model.index(row, 7))
             # Add other fields if necessary
         }
         dialog = EditInventoryDialog(data_to_edit, self)
@@ -1043,12 +1152,13 @@ class InventoryApp(QMainWindow):
         query = QSqlQuery()
         query.prepare("""
             UPDATE inventory 
-            SET name = ?, expiration_date = ?, purchase_location = ?, 
+            SET name = ?, date_opened = ?, expiration_date = ?, purchase_location = ?, 
                 purchase_date = ?, date_added = ?
             WHERE id = ?
         """)
 
         query.addBindValue(data['name'])
+        query.addBindValue(data['date_opened'])
         query.addBindValue(data['expiration_date'])
         query.addBindValue(data['purchase_location'])
         query.addBindValue(data['purchase_date'])
@@ -1071,7 +1181,7 @@ class InventoryApp(QMainWindow):
 
             # Convert sell date string to QDate object and calculate use-by date
             sellDate = QDate.fromString(sellDateStr, "MM-dd-yyyy")
-            useByDate = sellDate.addDays(5).toString("MM-dd-yyyy")
+            useByDate = sellDate.addDays(4).toString("MM-dd-yyyy")
 
 
             # Base64 encoded image (replace with your logo's base64)
@@ -1105,7 +1215,7 @@ class InventoryApp(QMainWindow):
                         <div class="title">Fig and Brie</div>
                         <div class="ingredients">Ingredients: {foodsAndItemsInline}</div>
                         <div>Fig and Brie Batch Code: {FigAndBrie_BatchCode}</div>
-                        <div>Please consume within 5 days of the creation date</div>
+                        <div>Please consume within 4 days days days of the creation date</div>
                         <div>Use By: {useByDate}</div>
                     </div>
                 </body>
@@ -1275,14 +1385,15 @@ class InventoryApp(QMainWindow):
                 purchase_date TEXT,
                 purchase_lot_number TEXT,
                 date_added TEXT,
+                date_opened TEXT,
                 status TEXT DEFAULT 'Available',
-                batch_id INTEGER,  -- New column for referencing batch
-                FOREIGN KEY (batch_id) REFERENCES batches(batch_id) -- Foreign key constraint
+                batch_id INTEGER,
+                FOREIGN KEY (batch_id) REFERENCES batches(batch_id)
             )
         """):
             QMessageBox.critical(self, "Database Error", query.lastError().text())
 
-        # Create the batches table
+        # Ensure the batches table is also correctly created
         if not query.exec_("""
             CREATE TABLE IF NOT EXISTS batches (
                 batch_id INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE,
